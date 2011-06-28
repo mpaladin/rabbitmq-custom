@@ -1,0 +1,232 @@
+#!/usr/bin/perl
+#+##############################################################################
+#                                                                              #
+# File: check_rabbitmq                                                         #
+#                                                                              #
+# Description: check RabbitMQ broker memory, processes, sockets descriptors,   #
+# file-descriptors and aliveness                                               #
+#                                                                              #
+#-##############################################################################
+
+#
+# used modules
+#
+
+use strict;
+use warnings;
+use File::Basename qw(basename);
+use HTTP::Request::Common;
+use JSON;
+use LWP::Simple;
+use LWP::UserAgent;
+use Nagios::Plugin;
+use TOM::Error qw(error_die);
+use TOM::Nagios qw(nagios_debug);
+use TOM::Syslog qw(syslog_open);
+
+#
+# global variables
+#
+our($ProgName, $Version, $Plugin);
+
+our %CUSTOMIZATION = ('memory' => {'url' => 'nodes',
+                                   'routine' => 'generic_used_max',
+                                   'used' => 'mem_used', 'max' => 'mem_limit',
+                                   'warning' => '0:75', 'critical' => '0:85'},
+                     'erlang-processes' => {'url' => 'nodes',
+                                   'routine' => 'generic_used_max',
+                                   'used' => 'proc_used', 'max' => 'proc_total',
+                                   'warning' => '0:75', 'critical' => '0:85'},
+                     'socket-descriptors' => {'url' => 'nodes',
+                                   'routine' => 'generic_used_max',
+                                   'used' => 'sockets_used', 'max' => 'sockets_total',
+                                   'warning' => '0:75', 'critical' => '0:85'},
+                     'file-descriptors' => {'url' => 'nodes',
+                                   'routine' => 'generic_used_max',
+                                   'used' => 'fd_used', 'max' => 'fd_total',
+                                   'warning' => '0:75', 'critical' => '0:85'},
+                     'consumers' => {'url' => 'nodes',
+                                   'routine' => 'consumers',
+                                   'warning' => '0:4000', 'critical' => '0:6000'},
+                     'aliveness' => {'url' => 'aliveness-test/%2F',
+                                   'routine' => 'aliveness',
+                                   'warning' => '', 'critical' => ''},);
+
+$ProgName = basename($0);
+$Version = sprintf("%d", q$Revision: 4965 $ =~ / (\d+) /);
+
+#
+# setup debugging and use proper error handling
+#
+unless (-t STDIN) {
+    $SIG{__DIE__}  = \&TOM::Nagios::handle_die;
+    $SIG{__WARN__} = \&TOM::Nagios::handle_warn;
+}
+syslog_open(ident => $ProgName, facility => "user");
+nagios_debug("started");
+
+#
+# instantiate the plugin
+#
+$Plugin = Nagios::Plugin->new(
+    shortname => "\x00",
+    usage   => "Usage: $ProgName [OPTIONS]",
+    version => $Version,
+    blurb   => "This Nagios plugin checks the RabbitMQ broker resources and\n" .
+               "raise an alarm based on the specified threshold.",
+    extra   => "\nAuthor: Massimo Paladin <Massimo.Paladin\@cern.ch>",
+);
+
+$Plugin->add_arg(
+    spec     => "host|H=s",
+    help     => "Host to check",
+    required => 1,
+);
+
+$Plugin->add_arg(
+    spec     => "port|p=i",
+    help     => "Port number of the management API",
+    required => 1,
+);
+
+$Plugin->add_arg(
+    spec     => "node|n=i",
+    help     => "node to consider (default: 0).",
+    default  => 0,
+);
+
+$Plugin->add_arg(
+    spec     => "baseurl|b=s",
+    help     => "base url for the broker management API (default: /).",
+    default  => "/api/",
+);
+
+$Plugin->add_arg(
+    spec     => "mode|m=s",
+    help     => "The working mode: memory, erlang-processes, socket-descriptors, file-descriptors and aliveness test.",
+    required => 1,
+);
+
+$Plugin->add_arg(
+    spec     => "username|U=s",
+    help     => "Username for the http authentication",
+    default  => "",
+);
+
+$Plugin->add_arg(
+    spec     => "password|P=s",
+    help     => "password for the http authentication",
+    default  => "",
+);
+
+$Plugin->add_arg(
+    spec     => "warning|w=s",
+    help     => "Warning thresholds.",
+);
+
+$Plugin->add_arg(
+    spec     => "critical|c=s",
+    help     => "Critical thresholds.",
+);
+
+#
+# parse and check the options
+#
+$Plugin->getopts();
+
+sub my_exit ($$) {
+    my($code, $message) = @_;
+
+    alarm(0);
+    $Plugin->nagios_exit(return_code => $code, message => $message);
+}
+
+sub get_json_url ($) {
+    my($url) = @_;
+    my($request, $ua, $response, $response_json, $exception);
+    $request = GET 'http://'
+                 . $Plugin->opts()->host() . ':'
+                 . $Plugin->opts()->port() 
+                 . $Plugin->opts()->baseurl()
+                 . $url;
+    $request->authorization_basic($Plugin->opts()->username(),
+                                  $Plugin->opts()->password());
+    $ua = LWP::UserAgent->new;
+
+    # Getting the response
+    $response = $ua->request($request);
+    unless ($response->is_success) {
+        my_exit(UNKNOWN, $response->as_string);
+    }
+    eval {
+        $response_json = JSON->new->utf8->decode($response->content);
+    };
+    $exception = $@;
+    my_exit(UNKNOWN, 'Response is nota valid JSON: '
+                                          . $response->content) if $exception;
+    return $response_json;
+}
+
+sub work_generic_used_max () {
+    my($response_json, $mode, $node, $ratio, $name_total, $name_used);
+    $mode = $Plugin->opts->mode();
+    $node = $Plugin->opts()->node();
+    $name_used = $CUSTOMIZATION{$mode}{'used'};
+    $name_total = $CUSTOMIZATION{$mode}{'max'};
+    $response_json = get_json_url($CUSTOMIZATION{$mode}{'url'});
+    unless (defined $response_json->[$node]->{$name_used}) {
+       my_exit(UNKNOWN, "$name_used not available at " . $CUSTOMIZATION{$mode}{'url'});
+    }
+    unless (defined $response_json->[$node]->{$name_total}) {
+       my_exit(UNKNOWN, "$name_total not available at " . $CUSTOMIZATION{$mode}{'url'});
+    }
+    $ratio = int(
+               ($response_json->[$node]->{$name_used} /
+               $response_json->[$node]->{$name_total}) * 100 + 0.5);
+    $Plugin->add_perfdata(
+           label => "$mode",
+           value => $ratio,
+           min   => 0,
+        );
+
+    # Exit with threshold checking
+    my_exit($Plugin->check_threshold( $ratio ),
+            "Usage: $ratio% (" . $response_json->[$node]->{$name_used} . ' / '
+            . $response_json->[$node]->{$name_total} . ')');
+}
+
+sub work_aliveness () {
+    my($response_json);
+    $response_json = get_json_url($CUSTOMIZATION{'aliveness'}{'url'});
+    $response_json->{'status'}
+                     || my_exit(UNKNOWN, "aliveness test status not available");
+    if ($response_json->{'status'} eq 'ok') {
+        my_exit(OK, 'Aliveness test status: OK');
+    } else {
+        my_exit(CRITICAL, 'Aliveness test status: ' . $response_json->{'status'});
+    }
+}
+
+sub work () {
+    my ($function, $warning, $critical);
+    if ($CUSTOMIZATION{$Plugin->opts()->mode()}) {
+        $warning = $Plugin->opts()->warning();
+        unless ($warning) {
+            $warning = $CUSTOMIZATION{$Plugin->opts()->mode()}{'warning'};
+        }
+        $critical = $Plugin->opts()->critical();
+        unless ($Plugin->opts()->critical()) {
+            $critical = $CUSTOMIZATION{$Plugin->opts()->mode()}{'critical'};
+        }
+        $Plugin->set_thresholds(warning => $warning, critical => $critical);
+
+        $function = 'work_' . $CUSTOMIZATION{$Plugin->opts()->mode()}{'routine'};
+        &{\&$function}();
+    } else {
+        my_exit(UNKNOWN, "Working mode not valid: " . $Plugin->opts()->mode());
+    }
+}
+
+alarm($Plugin->opts()->timeout());
+work();
+my_exit(UNKNOWN, "should not happen!");
