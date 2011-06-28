@@ -23,14 +23,8 @@ CONTROL=/usr/sbin/rabbitmqctl
 DESC=rabbitmq-server
 USER=$RABBITMQ_USER
 ROTATE_SUFFIX=
-if [ "x" = "x$RABBITMQ_BASE" ]
-then
-INIT_LOG_DIR=/var/log/rabbitmq
-LOCK_FILE=/var/lock/subsys/$NAME
-else
-INIT_LOG_DIR=$RABBITMQ_BASE/log
-LOCK_FILE=$RABBITMQ_BASE/data/$NAME-lock
-fi
+INIT_LOG_DIR=${RABBITMQ_LOG_BASE:-/var/log/rabbitmq}
+LOCK_FILE=/var/lock/subsys/${RABBITMQ_NAME:-${NAME}}
 
 test -x $DAEMON || exit 0
 test -x $CONTROL || exit 0
