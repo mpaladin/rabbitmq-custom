@@ -15,22 +15,33 @@
 ### END INIT INFO
 
 export RABBITMQ_USER=${RABBITMQ_USER:-rabbitmq}
+export RABBITMQ_PID_FILE=${RABBITMQ_PID_FILE:-/var/run/rabbitmq/pid}
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 NAME=rabbitmq-server
-DAEMON=/usr/sbin/${NAME}
-CONTROL=/usr/sbin/rabbitmqctl
+DAEMON=${RABBITMQ_HOME}/sbin/${NAME}
+CONTROL=${RABBITMQ_HOME}/sbin/rabbitmqctl
 DESC=rabbitmq-server
 USER=$RABBITMQ_USER
 ROTATE_SUFFIX=
 INIT_LOG_DIR=${RABBITMQ_LOG_BASE:-/var/log/rabbitmq}
+PID_FILE=$RABBITMQ_PID_FILE
 LOCK_FILE=/var/lock/subsys/${RABBITMQ_NAME:-${NAME}}
 
 test -x $DAEMON || exit 0
 test -x $CONTROL || exit 0
+cd ${RABBITMQ_TMP_BASE}
 
 RETVAL=0
 set -e
+
+my_exec () {
+    if [ `id -u` = `id -u ${RABBITMQ_USER}` ] ; then
+        exec $1
+    else
+        su ${RABBITMQ_USER} -s /bin/sh -c "$1"
+    fi
+}
 
 start_rabbitmq () {
     status_rabbitmq quiet
@@ -39,9 +50,9 @@ start_rabbitmq () {
     else
         RETVAL=0
         set +e
-        setsid sh -c "$DAEMON > ${INIT_LOG_DIR}/startup_log \
-            2> ${INIT_LOG_DIR}/startup_err" &
-        $CONTROL wait >/dev/null 2>&1
+        my_exec "$DAEMON > ${INIT_LOG_DIR}/startup_log \
+            2> ${INIT_LOG_DIR}/startup_err &"
+        my_exec "$CONTROL wait $PID_FILE >/dev/null 2>&1"
         RETVAL=$?
         set -e
         case "$RETVAL" in
@@ -52,6 +63,7 @@ start_rabbitmq () {
                 fi
                 ;;
             *)
+                rm -f $PID_FILE
                 echo FAILED - check ${INIT_LOG_DIR}/startup_\{log, _err\}
                 RETVAL=1
                 ;;
@@ -63,10 +75,11 @@ stop_rabbitmq () {
     status_rabbitmq quiet
     if [ $RETVAL = 0 ] ; then
         set +e
-        $CONTROL stop > ${INIT_LOG_DIR}/shutdown_log 2> ${INIT_LOG_DIR}/shutdown_err
+        my_exec "$CONTROL stop > ${INIT_LOG_DIR}/shutdown_log 2> ${INIT_LOG_DIR}/shutdown_err"
         RETVAL=$?
         set -e
         if [ $RETVAL = 0 ] ; then
+            rm -f $PID_FILE
             if [ -n "$LOCK_FILE" ] ; then
                 rm -f $LOCK_FILE
             fi
@@ -82,9 +95,9 @@ stop_rabbitmq () {
 status_rabbitmq() {
     set +e
     if [ "$1" != "quiet" ] ; then
-        $CONTROL status 2>&1
+        my_exec "$CONTROL status 2>&1"
     else
-        $CONTROL status > /dev/null 2>&1
+        my_exec "$CONTROL status > /dev/null 2>&1"
     fi
     if [ $? != 0 ] ; then
         RETVAL=3
@@ -94,7 +107,7 @@ status_rabbitmq() {
 
 rotate_logs_rabbitmq() {
     set +e
-    $CONTROL rotate_logs ${ROTATE_SUFFIX}
+    my_exec "$CONTROL rotate_logs ${ROTATE_SUFFIX}"
     if [ $? != 0 ] ; then
         RETVAL=1
     fi
