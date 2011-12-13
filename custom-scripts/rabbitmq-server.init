@@ -55,7 +55,6 @@ ensure_pid_dir () {
 
 remove_pid () {
     rm -f ${PID_FILE}
-    rmdir `dirname ${PID_FILE}` || :
 }
 
 start_rabbitmq () {
