@@ -158,6 +158,8 @@ def config_usage():
   port = 55672
   username = guest
   password = guest
+  default_vhost = something_if_it_differs_from_slash
+  vhost = something_if_it_differs_from_default
 
   [host_ssl]
   hostname = otherhost
@@ -202,6 +204,7 @@ def fmt_usage_stanza(root, verb):
 
 default_options = { "hostname"        : "localhost",
                     "port"            : "55672",
+                    "default_vhost"   : "/",
                     "username"        : "guest",
                     "password"        : "guest",
                     "ssl"             : False,
@@ -231,7 +234,8 @@ def make_parser():
         help="configuration file [default: ~/.rabbitmqadmin.conf]",
         metavar="CONFIG")
     add("-N", "--node", dest="node",
-        help="node described in the configuration file",
+        help="node described in the configuration file [default: 'default'" + \
+             " only if configuration file is specified]",
         metavar="NODE")
     add("-H", "--host", dest="hostname",
         help="connect to host HOST" ,
@@ -267,7 +271,10 @@ def make_parser():
 def make_configuration():
     make_parser()
     (options, args) = parser.parse_args()
-    if options.node and options.config is None:
+    setattr(options, "default_vhost", default_options["default_vhost"])
+    if options.node is None and options.config:
+        options.node = "default"
+    elif options.node and options.config is None:
         home = os.getenv('USERPROFILE') or os.getenv('HOME')
         setattr(options, "config", home + os.sep + ".rabbitmqadmin.conf")
     if options.node:
@@ -320,7 +327,7 @@ def output(s):
     print maybe_utf8(s, sys.stdout)
 
 def die(s):
-    sys.stderr.write(maybe_utf8("*** {0}".format(s), sys.stderr))
+    sys.stderr.write(maybe_utf8("*** {0}\n".format(s), sys.stderr))
     exit(1)
 
 def maybe_utf8(s, stream):
@@ -514,7 +521,7 @@ class Management:
             assert_usage(m in upload.keys(),
                          'mandatory argument "{0}" required'.format(m))
         upload['arguments'] = {}
-        upload['vhost'] = self.options.vhost or '/'
+        upload['vhost'] = self.options.vhost or self.options.default_vhost
         uri_args = {}
         for k in upload:
             v = upload[k]
