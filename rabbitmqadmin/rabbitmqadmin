@@ -271,7 +271,7 @@ def make_parser():
 def make_configuration():
     make_parser()
     (options, args) = parser.parse_args()
-    setattr(options, "default_vhost", default_options["default_vhost"])
+    setattr(options, "default_vhost", None)
     if options.node is None and options.config:
         options.node = "default"
     elif options.node and options.config is None:
