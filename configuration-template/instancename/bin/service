@@ -1,6 +1,0 @@
-#!/bin/sh
-
-# description: RabbitMQ messaging broker (hostname)
-
-. "/var/lib/rabbitmq/instancename/etc/rabbitmq.profile"
-exec /etc/init.d/rabbitmq-server ${1+"$@"}
