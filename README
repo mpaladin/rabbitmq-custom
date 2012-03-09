@@ -2,8 +2,6 @@ This repository contain some customization for running RabbitMQ messaging broker
 
 - custom-scripts contain 2 customized files in order to be able to
   run multiple instances with different users of RabbitMQ:
-     * rabbitmq-script-wrapper 
-       (replace /usr/sbin/rabbitmq-server and /usr/sbin/rabbitmqctl)
      * rabbitmq-server.init
        (replace /etc/init.d/rabbitmq-server)
 - custom rabbitmqadmin able to read configuration files
